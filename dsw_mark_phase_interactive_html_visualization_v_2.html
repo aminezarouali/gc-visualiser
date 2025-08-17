@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DSW Mark Phase – Interactive Visualization (v2)</title>
+  <style>
+    :root {
+      --bg: #0b0f14; --panel: #111722; --panel-2: #0f1420; --text: #e8eef7; --muted: #a8b3c7;
+      --accent: #5ac8fa; --accent-2: #ffd166; --ok: #8be9a8; --round: 16px; --shadow: 0 6px 20px rgba(0,0,0,.25);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: radial-gradient(1200px 800px at 20% -20%, #1b2440 0%, #0b0f14 60%);
+           font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica, Arial; }
+    .page { max-width: 1250px; margin: auto; padding: 28px; }
+    h1 { margin: 0 0 10px; font-weight: 800; letter-spacing: .2px; }
+    .sub { color: var(--muted); margin-bottom: 14px; }
+
+    .controls { display: flex; gap: 10px; align-items: center; margin: 16px 0 16px; flex-wrap: wrap; }
+    button, select { background: var(--panel); color: var(--text); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px; padding: 10px 12px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); }
+    button:hover { background: #172033; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .pill { background: var(--panel-2); border-radius: 12px; padding: 8px 12px; color: var(--muted); }
+    .legend { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 0; }
+    .badge { background: var(--panel); padding: 6px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); border: 1px solid rgba(255,255,255,.06); }
+
+    /* Layout: explanation panel is sticky on the right so it stays readable while stepping */
+    .grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 16px; align-items: start; }
+    @media (max-width: 1100px){ .grid { grid-template-columns: 1fr; } }
+
+    .card { background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border: 1px solid rgba(255,255,255,.08); border-radius: var(--round); box-shadow: var(--shadow); }
+    .card h2 { margin: 0; font-size: 16px; letter-spacing: .2px; color: var(--muted); padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .card .content { padding: 12px 14px; }
+
+    .sticky { position: sticky; top: 10px; }
+
+    table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 14px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px dashed rgba(255,255,255,.08); }
+    th { color: var(--muted); font-weight: 700; }
+    td.addr { color: var(--accent); font-weight: 700; }
+    td.changed strong { color: var(--accent-2); }
+
+    .kv { display: grid; grid-template-columns: 120px 1fr; row-gap: 8px; column-gap: 10px; font-family: var(--mono); font-size: 15px; }
+    .key { color: var(--muted); }
+
+    pre.code { margin: 0; font-family: var(--mono); font-size: 13px; line-height: 1.45; color: #dfe8ff; overflow: auto; max-height: 520px; padding: 12px; background: #0d1117; border-radius: 12px; border: 1px solid rgba(255,255,255,.08); }
+    .code-line { display: grid; grid-template-columns: 38px 1fr; gap: 10px; align-items: start; padding: 2px 6px; border-radius: 8px; }
+    .ln { color: #6e7681; text-align: right; padding-right: 6px; }
+    .arrow { color: var(--accent-2); font-weight: 900; padding-right: 8px; }
+    .hl { background: rgba(255, 209, 102, .12); outline: 1px solid rgba(255, 209, 102, .35); }
+
+    .explain { font-size: 15px; color: var(--text); line-height: 1.5; }
+    .muted { color: var(--muted); }
+    .footer { color: var(--muted); margin-top: 16px; font-size: 13px; }
+    .tag { background: rgba(255,255,255,.08); border-radius: 8px; padding: 2px 8px; margin-left: 6px; font-family: var(--mono); font-size: 12px; color: #c8d3e6; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Deutsch–Schorr–Waite (DSW) – Mark Phase</h1>
+    <div class="sub">Interactive, frame-by-frame pointer-reversal trace. Pointers are shown as <strong>#i</strong> (e.g., <strong>#2</strong>), and addresses are labeled the same way.</div>
+
+    <div class="controls">
+      <button id="newBtn">✨ NEW</button>
+      <button id="prevBtn">◀ Prev</button>
+      <button id="nextBtn">Next ▶</button>
+      <span class="pill">Step <span id="stepNum">1</span>/<span id="stepTotal">—</span></span>
+      <div style="flex:1"></div>
+      <label>Jump to: <select id="jump"></select></label>
+    </div>
+
+    <div class="legend">
+      <span class="badge">Counts: <strong>0</strong>=never visited, <strong>1</strong>=explore car, <strong>2</strong>=explore cdr/backtrack</span>
+      <span class="badge">Bold cells = changed since previous step</span>
+    </div>
+
+    <div class="grid" id="layout">
+      <div class="card">
+        <h2>Memory State View</h2>
+        <div class="content">
+          <table id="memTable">
+            <thead>
+              <tr>
+                <th style="width:80px">Address</th>
+                <th>car-memory</th>
+                <th>cdr-memory</th>
+                <th style="width:110px">count-mem</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card sticky">
+        <h2>Explanation View</h2>
+        <div class="content explain" id="explain"></div>
+        <div class="content" style="padding-top:0">
+          <div class="kv">
+            <div class="key">prev</div><div id="prevVal"></div>
+            <div class="key">curr</div><div id="currVal"></div>
+            <div class="key">root</div><div id="rootVal"></div>
+          </div>
+          <div class="footer">Backtracking restores edges using the breadcrumb stored in the overwritten slot (<span class="tag">car</span> or <span class="tag">cdr</span>), then follows the saved <span class="tag">prev</span>.</div>
+        </div>
+      </div>
+
+      <div class="card" style="grid-column: 1 / -1;">
+        <h2>Code View – <span class="muted">line about to execute is highlighted</span></h2>
+        <div class="content">
+          <pre class="code" id="code"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ===================== Code View =====================
+    const codeLines = [
+      '(define (mark prev curr)',
+      '  (case (count curr))',
+      '    ((0))',
+      '      (count! curr 1)',
+      '      (let ((hold (car-peek (untag curr))))',
+      '        (cond ',
+      '          ((descend? hold))',
+      '            (car-poke! (untag curr) prev)',
+      '            (mark curr hold)',
+      '          (else)',
+      '            (mark prev curr))))',
+      '    ((1))',
+      '      (count! curr 2)',
+      '      (let ((hold (cdr-peek (untag curr))))',
+      '        (cond ',
+      '          ((descend? hold))',
+      '            (cdr-poke! (untag curr) prev)',
+      '            (mark curr hold)',
+      '          (else)',
+      '            (mark prev curr))))',
+      '    ((2))',
+      '      (if (not (null? prev)))',
+      '        (case (count prev))',
+      '          ((1))',
+      '            (let ((hold (car-peek (untag prev))))',
+      '              (car-poke! (untag prev) curr)',
+      '              (mark hold prev))',
+      '          ((2))',
+      '            (let ((hold (cdr-peek (untag prev))))',
+      '              (cdr-poke! (untag prev) curr)',
+      '              (mark hold prev))))))'
+    ];
+
+    // highlight mapping (1-based)
+    const L = {
+      COUNT1: 4,
+      COUNT2: 13,
+      CARPOKE: 8,
+      CDRPOKE: 17,
+      CALL_CHILD: 9,  // (mark curr hold)
+      CALL_BACK: 31,  // (mark hold prev)
+      IF_NOT_NULL: 22
+    };
+
+    // ===================== Utilities =====================
+    const tbody = document.querySelector('#memTable tbody');
+    const prevVal = document.getElementById('prevVal');
+    const currVal = document.getElementById('currVal');
+    const rootVal = document.getElementById('rootVal');
+    const codePre = document.getElementById('code');
+    const explain = document.getElementById('explain');
+    const stepNum = document.getElementById('stepNum');
+    const stepTotal = document.getElementById('stepTotal');
+    const jump = document.getElementById('jump');
+    const newBtn = document.getElementById('newBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    let steps = [];
+    let idx = 0;
+
+    const asPtr = (i) => (i === null ? 'null' : `#${i}`);
+    const isPtr = (v) => typeof v === 'string' && /^#\d+$/.test(v);
+    const toAddr = (ptr) => isPtr(ptr) ? parseInt(ptr.slice(1), 10) : null;
+
+    function deepClone(o){ return JSON.parse(JSON.stringify(o)); }
+
+    function renderMemory(current, previous) {
+      tbody.innerHTML = '';
+      const n = current.mem.size;
+      for (let addr = 0; addr < n; addr++) {
+        const tr = document.createElement('tr');
+        const car = current.mem.car[addr];
+        const cdr = current.mem.cdr[addr];
+        const cnt = current.mem.cnt[addr];
+        const pcar = previous ? previous.mem.car[addr] : car;
+        const pcdr = previous ? previous.mem.cdr[addr] : cdr;
+        const pcnt = previous ? previous.mem.cnt[addr] : cnt;
+
+        const tdA = `<td class="addr">#${addr}</td>`;
+        const tdC = `<td class="${car!==pcar?'changed':''}">${car!==pcar?`<strong>${car}</strong>`:car}</td>`;
+        const tdD = `<td class="${cdr!==pcdr?'changed':''}">${cdr!==pcdr?`<strong>${cdr}</strong>`:cdr}</td>`;
+        const tdK = `<td class="${cnt!==pcnt?'changed':''}">${cnt!==pcnt?`<strong>${cnt}</strong>`:cnt}</td>`;
+        tr.innerHTML = tdA + tdC + tdD + tdK;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderGlobals(s) {
+      prevVal.textContent = asPtr(s.prev);
+      currVal.textContent = asPtr(s.curr);
+      rootVal.textContent = asPtr(s.root);
+    }
+
+    function renderCode(highlightLine) {
+      codePre.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      codeLines.forEach((line, i) => {
+        const div = document.createElement('div');
+        const n = i + 1;
+        div.className = 'code-line' + (n === highlightLine ? ' hl' : '');
+        const arrow = n === highlightLine ? '<span class="arrow">⇒</span>' : '<span class="arrow" style="visibility:hidden">⇒</span>';
+        div.innerHTML = `<span class="ln">${n}</span><span>${arrow}${line.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>`;
+        frag.appendChild(div);
+      });
+      codePre.appendChild(frag);
+    }
+
+    function render() {
+      const s = steps[idx];
+      const p = idx>0 ? steps[idx-1] : null;
+      stepNum.textContent = (idx+1);
+      stepTotal.textContent = steps.length;
+      renderMemory(s, p);
+      renderGlobals(s);
+      renderCode(s.highlight);
+      explain.textContent = s.explain;
+      // jump select
+      jump.value = String(idx);
+      prevBtn.disabled = idx === 0;
+      nextBtn.disabled = idx === steps.length-1;
+      document.title = `${s.title} – DSW Mark Visualization (v2)`;
+    }
+
+    function addStep(arr, prev, curr, root, highlight, title, explainTxt) {
+      steps.push({
+        title, highlight,
+        prev: prev, curr: curr, root: root,
+        mem: deepClone(arr),
+        explain: explainTxt
+      });
+    }
+
+    // ===================== DSW Simulator =====================
+    function buildTraceFromMemory(mem, rootIdx){
+      steps = []; idx = 0;
+      const arr = { size: mem.size, car: mem.car.slice(), cdr: mem.cdr.slice(), cnt: mem.cnt.slice() };
+
+      function descendQ(v){ const a = toAddr(v); return a !== null && arr.cnt[a] === 0; }
+
+      function mark(prev, curr){
+        // Safety: if curr is null, stop
+        if (curr === null) return;
+        const cnt = arr.cnt[curr];
+        if (cnt === 0){
+          addStep(arr, prev, curr, rootIdx, L.COUNT1,
+            `At ${asPtr(curr)} for the first time: set count to 1 (car phase)`,
+            `First arrival at ${asPtr(curr)}. Set its counter 0→1 to remember we are handling its car next.`);
+          arr.cnt[curr] = 1;
+          const hold = arr.car[curr];
+          if (descendQ(hold)){
+            addStep(arr, prev, curr, rootIdx, L.CARPOKE,
+              `Descending via car from ${asPtr(curr)} to ${hold}: reverse edge`,
+              `car(${asPtr(curr)})=${hold} is an unvisited pair ⇒ descend. Store breadcrumb by writing prev into car(${asPtr(curr)}).`);
+            arr.car[curr] = asPtr(prev); // breadcrumb
+            addStep(arr, prev, curr, rootIdx, L.CALL_CHILD,
+              `Move down to ${hold}`,
+              `Call (mark curr hold): new prev=${asPtr(curr)}, curr=${hold}.`);
+            return mark(curr, toAddr(hold));
+          } else {
+            addStep(arr, prev, curr, rootIdx, L.CALL_CHILD,
+              `car(${asPtr(curr)}) is atomic or visited: continue`,
+              `No descent via car (either atomic or already visited). Control proceeds to cdr phase.`);
+            return mark(prev, curr); // fall through to handle count==1 next
+          }
+        }
+        if (cnt === 1){
+          addStep(arr, prev, curr, rootIdx, L.COUNT2,
+            `At ${asPtr(curr)}: advance count 1→2 (cdr phase)`,
+            `We finished/ignored the car; now we will consider the cdr.`);
+          arr.cnt[curr] = 2;
+          const hold = arr.cdr[curr];
+          if (descendQ(hold)){
+            addStep(arr, prev, curr, rootIdx, L.CDRPOKE,
+              `Descending via cdr from ${asPtr(curr)} to ${hold}: reverse edge`,
+              `cdr(${asPtr(curr)})=${hold} is unvisited ⇒ descend. Store breadcrumb by writing prev into cdr(${asPtr(curr)}).`);
+            arr.cdr[curr] = asPtr(prev);
+            addStep(arr, prev, curr, rootIdx, L.CALL_CHILD,
+              `Move down to ${hold}`,
+              `Call (mark curr hold): new prev=${asPtr(curr)}, curr=${hold}.`);
+            return mark(curr, toAddr(hold));
+          } else {
+            addStep(arr, prev, curr, rootIdx, L.CALL_CHILD,
+              `cdr(${asPtr(curr)}) is atomic or visited: continue`,
+              `No descent via cdr. Begin backtracking from ${asPtr(curr)}.`);
+            return mark(prev, curr); // fall into backtrack case
+          }
+        }
+        // cnt === 2
+        addStep(arr, prev, curr, rootIdx, L.IF_NOT_NULL,
+          `Backtrack check at ${asPtr(curr)}`,
+          `If prev is null, we are done; otherwise restore the edge at prev and walk up.`);
+        if (prev === null){
+          return; // done
+        }
+        if (arr.cnt[prev] === 1){
+          const hold = arr.car[prev];
+          addStep(arr, prev, curr, rootIdx, L.CARPOKE,
+            `Backtrack via car: restore car(${asPtr(prev)}) := ${asPtr(curr)}`,
+            `We had reversed car(${asPtr(prev)}). Restore it to point back to the child ${asPtr(curr)}; the breadcrumb (${hold}) becomes the next prev.`);
+          arr.car[prev] = asPtr(curr);
+          addStep(arr, prev, curr, rootIdx, L.CALL_BACK,
+            `Continue at ${asPtr(prev)}; follow breadcrumb ${hold}`,
+            `Call (mark hold prev): new prev=${hold}, curr=${asPtr(prev)}.`);
+          return mark(toAddr(hold), prev);
+        } else { // arr.cnt[prev] === 2
+          const hold = arr.cdr[prev];
+          addStep(arr, prev, curr, rootIdx, L.CDRPOKE,
+            `Backtrack via cdr: restore cdr(${asPtr(prev)}) := ${asPtr(curr)}`,
+            `We had reversed cdr(${asPtr(prev)}). Restore it to point back to the child ${asPtr(curr)}; the breadcrumb (${hold}) becomes the next prev.`);
+          arr.cdr[prev] = asPtr(curr);
+          addStep(arr, prev, curr, rootIdx, L.CALL_BACK,
+            `Continue at ${asPtr(prev)}; follow breadcrumb ${hold}`,
+            `Call (mark hold prev): new prev=${hold}, curr=${asPtr(prev)}.`);
+          return mark(toAddr(hold), prev);
+        }
+      }
+
+      mark(null, rootIdx);
+      return steps;
+    }
+
+    // ===================== Provided Initial Memory (converted to #i) =====================
+    function providedMemory(){
+      const size = 6;
+      const car = ["'GARBAGE'","'C'","'A'",null,"'B'",null];
+      const cdr = [null,'#2','#4',null,'#1',null];
+      const cnt = Array(size).fill(0);
+      return { size, car, cdr, cnt };
+    }
+
+    // ===================== Random Memory Generator (size ≤ 10) =====================
+    function randomMemory(){
+      const size = Math.max(3, Math.min(10, Math.floor(Math.random()*10)+1));
+      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const car = new Array(size).fill(null);
+      const cdr = new Array(size).fill(null);
+      const cnt = new Array(size).fill(0);
+
+      for (let i=0;i<size;i++){
+        // car: 60% atom, 25% pointer, 15% null
+        const r = Math.random();
+        if (r < 0.60){ car[i] = `'${letters[i % letters.length]}'`; }
+        else if (r < 0.85){
+          let j = Math.floor(Math.random()*size);
+          if (j===i) j = (j+1)%size;
+          car[i] = `#${j}`;
+        } else { car[i] = null; }
+        // cdr: 60% pointer, 40% null
+        if (Math.random() < 0.60){
+          let k = Math.floor(Math.random()*size);
+          if (k===i) k = (k+1)%size;
+          cdr[i] = `#${k}`;
+        } else { cdr[i] = null; }
+      }
+      return { size, car, cdr, cnt };
+    }
+
+    function seedProvided(){
+      const mem = providedMemory();
+      const root = 2; // #2
+      steps = buildTraceFromMemory(mem, root);
+      // Build jump options
+      jump.innerHTML = '';
+      steps.forEach((s, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `${i+1}. ${s.title}`;
+        jump.appendChild(opt);
+      });
+      render();
+    }
+
+    function seedRandom(){
+      const mem = randomMemory();
+      const root = Math.floor(Math.random()*mem.size);
+      steps = buildTraceFromMemory(mem, root);
+      jump.innerHTML = '';
+      steps.forEach((s, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `${i+1}. ${s.title}`;
+        jump.appendChild(opt);
+      });
+      render();
+    }
+
+    // ===================== Controls =====================
+    prevBtn.addEventListener('click', () => { if (idx>0){ idx--; render(); } });
+    nextBtn.addEventListener('click', () => { if (idx<steps.length-1){ idx++; render(); } });
+    jump.addEventListener('change', (e) => { idx = parseInt(e.target.value, 10); render(); });
+    newBtn.addEventListener('click', () => { seedRandom(); });
+
+    // Boot with the provided scenario
+    seedProvided();
+  </script>
+</body>
+</html>
